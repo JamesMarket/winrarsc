@@ -1,21 +1,53 @@
-name: Universal Auto Sync
+name: 🔄 自动同步上游仓库
 
 on:
   schedule:
-    - cron: '0 0 * * *' # 每天 UTC 0 点运行
-  workflow_dispatch:      # 支持手动点击运行
+    - cron: '0 0 * * *' # 每天 UTC 0 点（北京时间上午 8 点）自动运行
+  workflow_dispatch:      # 支持手动点击 "Run workflow" 触发运行
 
 jobs:
   sync:
+    name: Sync with Upstream
     runs-on: ubuntu-latest
     permissions:
-      contents: write # 必须开启写入权限，否则无法推送更新
+      contents: write # 赋予 Actions 写入权限
 
     steps:
-      - name: Sync with Upstream
+      - name: 🔍 检查仓库信息
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 使用 GitHub CLI 自动检测上游并同步
-          # 它会自动识别原仓库地址和默认分支名
-          gh repo sync ${{ github.repository }}
+          echo "=== 正在获取上游仓库信息 ==="
+          # 获取父仓库（原仓库）的名称
+          UPSTREAM=$(gh repo view ${{ github.repository }} --json parent -q ".parent.nameWithOwner")
+          DEFAULT_BRANCH=$(gh repo view ${{ github.repository }} --json defaultBranchRef -q ".defaultBranchRef.name")
+          
+          echo "当前仓库: ${{ github.repository }}"
+          echo "上游仓库: $UPSTREAM"
+          echo "主分支名: $DEFAULT_BRANCH"
+          
+          if [ -z "$UPSTREAM" ]; then
+            echo "❌ 错误: 当前仓库不是 Fork 出来的，无法同步。"
+            exit 1
+          fi
+
+      - name: 🔄 执行同步操作
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "=== 开始同步 ==="
+          # 执行同步，并捕捉输出
+          SYNC_OUTPUT=$(gh repo sync ${{ github.repository }} 2>&1)
+          echo "$SYNC_OUTPUT"
+          
+          # 检查输出结果
+          if [[ "$SYNC_OUTPUT" == *"Already up to date"* ]]; then
+            echo "✅ 结果: 已经是最新版，无需更新。"
+          elif [[ "$SYNC_OUTPUT" == *"successfully synced"* ]] || [[ "$SYNC_OUTPUT" == *"Updated"* ]]; then
+            echo "🎉 结果: 同步成功！"
+          else
+            echo "⚠️ 注意: 同步过程中可能存在冲突或异常，请检查上方日志。"
+          fi
+
+      - name: ✨ 任务完成
+        run: echo "同步任务于 $(date) 执行完毕。"
