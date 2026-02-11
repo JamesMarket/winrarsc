@@ -1,0 +1,28 @@
+name: Scheduled Repo Sync
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # 每天凌晨 0 点自动运行 (UTC 时间)
+  workflow_dispatch:      # 允许手动触发按钮
+
+jobs:
+  sync_latest_from_upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout target repo
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Sync upstream changes
+        id: sync
+        uses: aormsby/Fork-Sync-With-Upstream-action@v3.4.1
+        with:
+          target_sync_branch: main        # 你的分支名（通常是 main 或 master）
+          target_repo_token: ${{ secrets.GITHUB_TOKEN }}
+          upstream_sync_branch: main     # 原仓库的分支名
+          upstream_sync_repo: target_user/target_repo # 原仓库的路径（用户名/仓库名）
+
+      - name: Check for errors
+        if: failure()
+        run: echo "同步失败，可能存在冲突，请手动检查。"
