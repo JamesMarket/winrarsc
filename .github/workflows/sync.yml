@@ -1,12 +1,12 @@
-name: 🔄 终极全自动同步
+name: 🔄 终极全自动同步 (通用版)
 
 on:
   schedule:
-    - cron: '0 0 * * *' # 每天凌晨自动运行
-  workflow_dispatch:      # 支持手动触发
+    - cron: '0 0 * * *'
+  workflow_dispatch:
 
 jobs:
-  universal-sync:
+  sync:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -17,40 +17,53 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: 🤖 自动识别并同步
+      - name: 🤖 自动识别上游并同步
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 1. 自动获取父仓库地址和当前分支
-          REPO_INFO=$(gh repo view ${{ github.repository }} --json parent,defaultBranchRef)
-          UPSTREAM_URL=$(echo $REPO_INFO | jq -r '.parent.clone_url // empty')
-          CURRENT_BRANCH=$(echo $REPO_INFO | jq -r '.defaultBranchRef.name')
-
+          echo "=== 正在自动识别上游仓库 ==="
+          
+          # 尝试方法 1: GH CLI (你之前失败的方法)
+          UPSTREAM_URL=$(gh repo view ${{ github.repository }} --json parent -q ".parent.clone_url" 2>/dev/null || echo "")
+          
+          # 尝试方法 2: 直接请求 GitHub REST API (更底层，成功率更高)
           if [ -z "$UPSTREAM_URL" ] || [ "$UPSTREAM_URL" = "null" ]; then
-            echo "❌ 错误：此仓库在 GitHub API 中没有父仓库记录（可能是脱离关系的 Fork）。"
-            echo "💡 建议：请手动检查该仓库是否是通过点击 GitHub 官方 'Fork' 按钮创建的。"
+            echo "⚠️ GH CLI 未能获取父仓库，尝试直接调用 REST API..."
+            UPSTREAM_URL=$(curl -s -H "Authorization: token $GH_TOKEN" \
+              https://api.github.com/repos/${{ github.repository }} \
+              | jq -r '.parent.clone_url // empty')
+          fi
+
+          # 结果检查
+          if [ -z "$UPSTREAM_URL" ] || [ "$UPSTREAM_URL" = "null" ]; then
+            echo "❌ 严重错误：GitHub API 坚持认为此仓库没有父仓库（Parent）。"
+            echo "这通常意味着 Fork 关系在 GitHub 后端已断开。"
             exit 1
           fi
 
-          echo "✅ 识别到上游：$UPSTREAM_URL"
-          echo "✅ 当前主分支：$CURRENT_BRANCH"
+          echo "✅ 成功识别上游地址: $UPSTREAM_URL"
 
-          # 2. 配置 Git
+          # 获取默认分支名 (master 或 main)
+          DEFAULT_BRANCH=$(git branch --show-current)
+          echo "✅ 目标同步分支: $DEFAULT_BRANCH"
+
+          # 配置 Git 环境
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-          # 3. 添加远程分支并强制同步
+          # 添加上游并执行同步
           git remote add upstream "$UPSTREAM_URL"
-          git fetch upstream "$CURRENT_BRANCH"
-          
-          # 尝试快进合并，如果失败则强行覆盖（保持跟原作者完全一致）
-          git checkout "$CURRENT_BRANCH"
-          if git merge upstream/"$CURRENT_BRANCH" --ff-only; then
-            echo "🚀 已通过快进模式同步成功。"
+          git fetch upstream "$DEFAULT_BRANCH"
+
+          # 强制合并（以原作者为准）
+          echo "=== 正在执行合并任务 ==="
+          git checkout "$DEFAULT_BRANCH"
+          if git merge upstream/"$DEFAULT_BRANCH" --ff-only; then
+            echo "🚀 同步成功 (Fast-forward)"
           else
-            echo "⚠️ 检测到本地有改动或冲突，执行强行覆盖，以保持与原作者一致。"
-            git reset --hard upstream/"$CURRENT_BRANCH"
+            echo "⚠️ 检测到冲突，执行强制覆盖以保持与原作者一致。"
+            git reset --hard upstream/"$DEFAULT_BRANCH"
           fi
 
-          # 4. 推送回自己的仓库
-          git push origin "$CURRENT_BRANCH" --force
+          # 推送回 origin
+          git push origin "$DEFAULT_BRANCH" --force
